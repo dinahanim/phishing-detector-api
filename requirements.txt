@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+scikit-learn
+pandas
+requests
+beautifulsoup4
+tqdm
+urllib3
+aiohttp
+cryptography
