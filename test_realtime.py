@@ -39,6 +39,7 @@ def test_realtime_analysis():
             print(f"Result: {data.get('result')}")
             print(f"Confidence: {data.get('confidence')}")
             print(f"Analysis time reported: {data.get('analysis_time', 'N/A')}")
+            print(f"Website summary: {data.get('website_summary', 'N/A')}")
             
             if elapsed > 1:
                 print("✅ PROOF: Real-time HTML fetch occurred (took >1 second)")

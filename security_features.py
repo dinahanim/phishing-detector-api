@@ -148,6 +148,7 @@ async def get_ip_intelligence(url: str):
                         "domain": domain,
                         "country": data.get("location", {}).get("country", "Unknown"),
                         "city": data.get("location", {}).get("city", "Unknown"),
+                        "asn": data.get("asn", {}).get("asn", "Unknown"),
                         "asn_name": data.get("asn", {}).get("name", "Unknown"),
                         "company_name": data.get("company", {}).get("name", "Unknown"),
                         "is_datacenter": data.get("company", {}).get("type") == "hosting",

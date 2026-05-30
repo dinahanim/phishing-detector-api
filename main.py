@@ -1,10 +1,12 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+import asyncio
 import pickle
 import pandas as pd
 import requests
 from fastapi.middleware.cors import CORSMiddleware
 from features import extract_features
+from security_features import check_certificate_info, get_ip_intelligence
 from urllib.parse import urlparse
 import time
 from datetime import datetime
@@ -56,12 +58,28 @@ def get_ip_info(domain: str):
     except Exception:
         return {"ip": "Unknown", "country": "Unknown", "city": "Unknown", "asn": "Unknown", "org": "Unknown"}
 
+def normalize_url(url: str) -> str:
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = "http://" + url
+    return url
+
 def check_url_accessible(url: str):
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.head(url, timeout=8, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+        response = requests.head(url, timeout=8, allow_redirects=True, headers=headers)
+        if response.status_code == 200:
+            return True, response.status_code
+        if response.status_code in (400, 403, 405, 414, 500, 501):
+            response = requests.get(url, timeout=10, allow_redirects=True, headers=headers)
+            return response.status_code == 200, response.status_code
         return response.status_code == 200, response.status_code
-    except:
-        return False, 0
+    except requests.RequestException:
+        try:
+            response = requests.get(url, timeout=10, allow_redirects=True, headers=headers)
+            return response.status_code == 200, response.status_code
+        except Exception:
+            return False, 0
 
 # Trusted domains - always legitimate
 TRUSTED_DOMAINS = [
@@ -72,9 +90,9 @@ TRUSTED_DOMAINS = [
 ]
 
 @app.post("/predict")
-def predict(data: URLRequest):
+async def predict(data: URLRequest):
     start_time = time.time()
-    url = data.url
+    url = normalize_url(data.url)
     
     print(f"\n{'='*50}")
     print(f"Analyzing: {url}")
@@ -83,18 +101,25 @@ def predict(data: URLRequest):
     domain = parsed.netloc or parsed.path
     domain = domain.split(':')[0]
     domain_lower = domain.lower()
+
+    ip_info = await get_ip_intelligence(url)
+    if ip_info.get("error"):
+        ip_info = get_ip_info(domain)
+
+    certificate_info = await check_certificate_info(url) if url.startswith("https://") else {"has_ssl": False, "error": "HTTP URL (no SSL)"}
     
     # CHECK 1: Is this a trusted domain?
-    is_trusted = any(td in domain_lower for td in TRUSTED_DOMAINS)
+    is_trusted = any(td == domain_lower or domain_lower.endswith(f".{td}") for td in TRUSTED_DOMAINS)
     
     if is_trusted:
         print(f"TRUSTED DOMAIN: {domain} -> LEGITIMATE")
-        # Still try to get summary
+        feats = {}
+        website_summary = "This is a well-known, trusted website."
         try:
             feats = extract_features(url)
-            website_summary = feats.pop('_website_summary', "This is a well-known, trusted website.") if '_website_summary' in feats else "This is a well-known, trusted website."
-        except:
-            website_summary = "This is a well-known, trusted website."
+            website_summary = feats.pop('_website_summary', website_summary) if '_website_summary' in feats else website_summary
+        except Exception:
+            pass
         
         return {
             "result": "LEGITIMATE",
@@ -103,10 +128,15 @@ def predict(data: URLRequest):
             "message": "This website appears to be legitimate based on our analysis.",
             "analysis_time": f"{time.time() - start_time:.2f} seconds",
             "security_details": {
-                "certificate": get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False},
-                "ip_info": get_ip_info(domain)
+                "certificate": certificate_info,
+                "ip_info": ip_info
             },
-            "html_features": {},
+            "html_features": {
+                "has_login_form": feats.get('has_login_form', False),
+                "num_scripts": feats.get('num_scripts', 0),
+                "num_iframes": feats.get('num_iframes', 0),
+                "title_login": feats.get('title_login', 0)
+            },
             "website_summary": website_summary
         }
     
@@ -121,8 +151,8 @@ def predict(data: URLRequest):
             "message": f"Page cannot be reached (Error {status_code})",
             "analysis_time": f"{time.time() - start_time:.2f} seconds",
             "security_details": {
-                "certificate": get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False},
-                "ip_info": get_ip_info(domain)
+                "certificate": certificate_info,
+                "ip_info": ip_info
             },
             "html_features": {},
             "website_summary": "Unable to fetch website content - page unreachable."
@@ -157,13 +187,14 @@ def predict(data: URLRequest):
         "message": message,
         "analysis_time": f"{time.time() - start_time:.2f} seconds",
         "security_details": {
-            "certificate": get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False},
-            "ip_info": get_ip_info(domain)
+            "certificate": certificate_info,
+            "ip_info": ip_info
         },
         "html_features": {
             "has_login_form": feats.get('has_login_form', False),
             "num_scripts": feats.get('num_scripts', 0),
-            "num_iframes": feats.get('num_iframes', 0)
+            "num_iframes": feats.get('num_iframes', 0),
+            "title_login": feats.get('title_login', 0)
         },
         "website_summary": website_summary
     }
