@@ -34,7 +34,7 @@ async def check_certificate_info(url: str):
                 "issuer_cn": cert_dict.get("issuer_cn", "Unknown"),
                 "subject": cert_dict.get("subject", "Unknown"),
                 "subject_cn": cert_dict.get("subject_cn", "Unknown"),
-                "days_valid": cert_dict.get("days_valid", 0),
+                "days_valid": str(cert_dict.get("days_valid", "Unknown")),
                 "is_short_valid": cert_dict.get("days_valid", 365) <= 90,
                 "is_free_ca": _is_free_certificate_authority(cert_dict.get("issuer", "")),
                 "is_self_signed": cert_dict.get("self_signed", False),
@@ -143,14 +143,17 @@ async def get_ip_intelligence(url: str):
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
+                    raw_asn = data.get("asn", {}).get("asn")
+                    raw_asn_name = data.get("asn", {}).get("name")
+                    raw_company_name = data.get("company", {}).get("name")
                     return {
-                        "ip": ip_address,
-                        "domain": domain,
-                        "country": data.get("location", {}).get("country", "Unknown"),
-                        "city": data.get("location", {}).get("city", "Unknown"),
-                        "asn": data.get("asn", {}).get("asn", "Unknown"),
-                        "asn_name": data.get("asn", {}).get("name", "Unknown"),
-                        "company_name": data.get("company", {}).get("name", "Unknown"),
+                        "ip": str(ip_address),
+                        "domain": str(domain),
+                        "country": str(data.get("location", {}).get("country", "Unknown")),
+                        "city": str(data.get("location", {}).get("city", "Unknown")),
+                        "asn": str(raw_asn) if raw_asn is not None else "Unknown",
+                        "asn_name": str(raw_asn_name) if raw_asn_name is not None else "Unknown",
+                        "company_name": str(raw_company_name) if raw_company_name is not None else "Unknown",
                         "is_datacenter": data.get("company", {}).get("type") == "hosting",
                         "is_vpn": data.get("privacy", {}).get("is_vpn", False),
                     }
