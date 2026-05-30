@@ -7,6 +7,48 @@ from datetime import datetime
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
+def extract_website_description(html: str, url: str) -> str:
+    """Extract meaningful description/summary from website HTML"""
+    if not html:
+        return "Unable to fetch website content."
+    
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        # Priority 1: Meta description
+        meta_desc = soup.find('meta', attrs={'name': 'description'})
+        if meta_desc and meta_desc.get('content'):
+            desc = meta_desc['content'].strip()
+            if len(desc) > 30:
+                return desc[:400] + "..." if len(desc) > 400 else desc
+        
+        # Priority 2: Open Graph description
+        og_desc = soup.find('meta', attrs={'property': 'og:description'})
+        if og_desc and og_desc.get('content'):
+            desc = og_desc['content'].strip()
+            if len(desc) > 30:
+                return desc[:400] + "..." if len(desc) > 400 else desc
+        
+        # Priority 3: Page title
+        if soup.title and soup.title.string:
+            title = soup.title.string.strip()
+            if len(title) > 10:
+                return title
+        
+        # Priority 4: First meaningful paragraph
+        main_content = soup.find('main') or soup.find('article') or soup.find('body')
+        if main_content:
+            paragraphs = main_content.find_all('p')
+            for p in paragraphs:
+                text = p.get_text().strip()
+                if len(text) > 80:
+                    return text[:400] + "..." if len(text) > 400 else text
+        
+        return "No descriptive summary available for this website."
+        
+    except Exception:
+        return "Unable to generate website summary."
+
 def extract_features_from_html(url, html):
     features = {}
     features['url_length'] = len(url)
@@ -59,11 +101,17 @@ def extract_features(url):
     print(f"[URL ANALYSIS] Length: {features['url_length']}")
     print(f"[URL ANALYSIS] HTTPS: {features['https'] == 1}")
     
+    website_summary = "Unable to fetch website content."
+    
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, timeout=10, headers=headers, verify=False)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(url, timeout=15, headers=headers, verify=False)
         html = response.text
         soup = BeautifulSoup(html, 'html.parser')
+        
+        # Extract website summary
+        website_summary = extract_website_description(html, url)
+        print(f"[SUMMARY] Generated summary: {website_summary[:100]}...")
         
         features['has_login_form'] = 1 if soup.find('input', {'type': 'password'}) else 0
         title = ""
@@ -84,6 +132,11 @@ def extract_features(url):
         features['title_login'] = 0
         features['num_scripts'] = 0
         features['num_iframes'] = 0
+        website_summary = "Unable to fetch website content."
     
     print(f"{'='*60}\n")
+    
+    # Add summary to features
+    features['_website_summary'] = website_summary
+    
     return features
