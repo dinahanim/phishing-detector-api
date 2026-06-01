@@ -33,40 +33,110 @@ with open("feature_columns.pkl", "rb") as f:
     feature_columns = pickle.load(f)
 
 def is_valid_domain_format(domain: str) -> bool:
-    """Check if domain has proper format (contains dot, not just random characters)"""
     if not domain:
         return False
-    # Must have at least one dot
     if '.' not in domain:
         return False
-    # Must have at least 3 characters before the dot
     parts = domain.split('.')
     if len(parts) < 2:
         return False
     if len(parts[0]) < 2:
         return False
-    # TLD must be at least 2 characters
     if len(parts[-1]) < 2:
         return False
     return True
 
 def domain_exists(domain: str) -> bool:
-    """Check if domain actually exists in DNS"""
     try:
         socket.gethostbyname(domain)
         return True
     except socket.gaierror:
         return False
 
+def detect_phishing_patterns(url: str, domain: str) -> tuple:
+    """Detect phishing patterns from URL structure even if site is dead"""
+    url_lower = url.lower()
+    domain_lower = domain.lower()
+    phishing_score = 0
+    reasons = []
+    
+    # Pattern 1: Suspicious TLDs (heavily abused by phishers)
+    suspicious_tlds = ['.xyz', '.top', '.club', '.online', '.site', '.click', '.win', '.bid', '.loan', '.download', '.cfd', '.icu', '.sbs', '.shop']
+    for tld in suspicious_tlds:
+        if domain_lower.endswith(tld):
+            phishing_score += 30
+            reasons.append(f"Suspicious TLD '{tld}' (commonly used for phishing)")
+            break
+    
+    # Pattern 2: Brand impersonation
+    brands = ['paypal', 'apple', 'microsoft', 'google', 'facebook', 'amazon', 'netflix', 'paypal', 'ebay', 'bank', 'icloud', 'icloud']
+    for brand in brands:
+        if brand in domain_lower:
+            # Check if it's exactly the brand domain or has extra words
+            if not domain_lower.endswith(f"{brand}.com") and not domain_lower.endswith(f"{brand}.org"):
+                phishing_score += 25
+                reasons.append(f"Brand impersonation detected: '{brand}' in domain")
+                break
+    
+    # Pattern 3: Suspicious keywords in domain
+    suspicious_keywords = ['login', 'verify', 'secure', 'account', 'update', 'confirm', 'validate', 'signin', 'sign-in', 'verification', 'alert', 'security']
+    for keyword in suspicious_keywords:
+        if keyword in domain_lower:
+            phishing_score += 15
+            reasons.append(f"Suspicious keyword '{keyword}' in domain")
+            break
+    
+    # Pattern 4: Multiple hyphens or numbers (random-looking domains)
+    if domain_lower.count('-') >= 2:
+        phishing_score += 10
+        reasons.append("Multiple hyphens in domain - suspicious pattern")
+    
+    digit_count = sum(c.isdigit() for c in domain_lower)
+    if digit_count >= 3:
+        phishing_score += 10
+        reasons.append("Multiple numbers in domain - suspicious pattern")
+    
+    # Pattern 5: Very long domain (phishing sites often use long, random domains)
+    if len(domain) > 25:
+        phishing_score += 10
+        reasons.append("Unusually long domain name")
+    
+    # Pattern 6: URL length (phishing URLs are often very long)
+    if len(url) > 100:
+        phishing_score += 10
+        reasons.append("Very long URL - typical for phishing")
+    
+    # Pattern 7: Multiple subdomains
+    subdomain_count = domain_lower.count('.')
+    if subdomain_count >= 3:
+        phishing_score += 15
+        reasons.append("Multiple subdomains - domain obfuscation technique")
+    
+    # Pattern 8: Contains @ symbol (rare in legitimate URLs)
+    if '@' in url:
+        phishing_score += 25
+        reasons.append("Contains '@' symbol - credential stealing attempt")
+    
+    # Pattern 9: IP address instead of domain name
+    ip_pattern = re.compile(r'\d+\.\d+\.\d+\.\d+')
+    if ip_pattern.search(domain):
+        phishing_score += 30
+        reasons.append("Uses IP address instead of domain name - highly suspicious")
+    
+    # Determine result based on score
+    if phishing_score >= 40:
+        return "PHISHING", reasons, phishing_score
+    elif phishing_score >= 20:
+        return "SUSPICIOUS", reasons, phishing_score
+    else:
+        return "CLEAN", reasons, phishing_score
+
 def get_certificate_info(domain: str):
-    """Get SSL certificate details"""
     try:
         context = ssl.create_default_context()
         with socket.create_connection((domain, 443), timeout=5) as sock:
             with context.wrap_socket(sock, server_hostname=domain) as ssock:
                 cert = ssock.getpeercert()
-                
-                # Extract issuer as clean string
                 issuer_parts = []
                 for item in cert.get('issuer', []):
                     for key, value in item:
@@ -74,12 +144,10 @@ def get_certificate_info(domain: str):
                             issuer_parts.append(value)
                         elif key == 'organizationName':
                             issuer_parts.insert(0, value)
-                
                 if issuer_parts:
                     issuer_str = " - ".join(issuer_parts)
                 else:
                     issuer_str = "Unknown"
-                
                 return {
                     "has_ssl": True,
                     "issuer": issuer_str,
@@ -89,7 +157,6 @@ def get_certificate_info(domain: str):
         return {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"}
 
 def get_ip_info(domain: str):
-    """Get IP address and location info"""
     try:
         ip = socket.gethostbyname(domain)
         return {"ip": ip, "country": "Unknown", "city": "Unknown", "asn": "Unknown", "org": "Unknown"}
@@ -103,7 +170,6 @@ def check_url_accessible(url: str):
     except:
         return False, 0
 
-# Trusted domains - always legitimate
 TRUSTED_DOMAINS = [
     'github.com', 'microsoft.com', 'google.com', 'wikipedia.org', 
     'kedah.gov.my', 'apple.com', 'amazon.com', 'facebook.com',
@@ -124,88 +190,87 @@ def predict(data: URLRequest):
     domain = domain.split(':')[0]
     domain_lower = domain.lower()
     
-    # STEP 1: Validate domain format (must be like "example.com", not just "h")
+    # STEP 1: Validate domain format
     if not is_valid_domain_format(domain_lower):
-        print(f"INVALID DOMAIN FORMAT: {domain_lower}")
         return {
             "result": "INVALID",
             "display_result": "INVALID WEBSITE ADDRESS",
             "confidence": "95%",
             "message": "Please enter a valid website address (e.g., google.com, github.com)",
             "analysis_time": f"{time.time() - start_time:.2f} seconds",
-            "security_details": {
-                "certificate": {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"},
-                "ip_info": {"ip": "N/A", "country": "N/A", "city": "N/A", "asn": "N/A", "org": "N/A"}
-            },
+            "security_details": {},
             "html_features": {},
-            "website_summary": "Invalid domain format. Please enter a valid website address like 'example.com'."
+            "website_summary": "Invalid domain format."
         }
     
-    # STEP 2: Check if domain actually exists in DNS
-    if not domain_exists(domain_lower):
-        print(f"DOMAIN DOES NOT EXIST: {domain_lower}")
-        return {
-            "result": "INVALID",
-            "display_result": "WEBSITE DOES NOT EXIST",
-            "confidence": "95%",
-            "message": f"The domain '{domain}' does not exist. Please check the spelling and try again.",
-            "analysis_time": f"{time.time() - start_time:.2f} seconds",
-            "security_details": {
-                "certificate": {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"},
-                "ip_info": {"ip": "N/A", "country": "N/A", "city": "N/A", "asn": "N/A", "org": "N/A"}
-            },
-            "html_features": {},
-            "website_summary": f"The domain '{domain}' does not exist in the DNS system."
-        }
-    
-    # STEP 3: Is this a trusted domain?
+    # STEP 2: Check trusted domains
     is_trusted = any(td in domain_lower for td in TRUSTED_DOMAINS)
-    
     if is_trusted:
-        print(f"TRUSTED DOMAIN: {domain} -> LEGITIMATE")
-        try:
-            feats = extract_features(url)
-            website_summary = feats.pop('_website_summary', "This is a well-known, trusted website.") if '_website_summary' in feats else "This is a well-known, trusted website."
-        except:
-            website_summary = "This is a well-known, trusted website."
-        
         return {
             "result": "LEGITIMATE",
             "display_result": "LEGITIMATE",
             "confidence": "95%",
             "message": "This website appears to be legitimate based on our analysis.",
             "analysis_time": f"{time.time() - start_time:.2f} seconds",
-            "security_details": {
-                "certificate": get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"},
-                "ip_info": get_ip_info(domain)
-            },
+            "security_details": {},
             "html_features": {},
-            "website_summary": website_summary
+            "website_summary": "This is a well-known, trusted website."
         }
     
-    # STEP 4: Is the page accessible?
+    # STEP 3: Detect phishing patterns from URL structure (even if site is dead)
+    pattern_result, pattern_reasons, phishing_score = detect_phishing_patterns(url, domain_lower)
+    
+    print(f"Phishing pattern score: {phishing_score}, Reasons: {pattern_reasons}")
+    
+    # STEP 4: Check if URL is accessible
     is_accessible, status_code = check_url_accessible(url)
     
-    if not is_accessible:
+    # STEP 5: Final decision based on pattern detection first
+    if pattern_result == "PHISHING":
         return {
-            "result": "UNREACHABLE",
-            "display_result": "SUSPICIOUS - Page Unreachable",
-            "confidence": "85%",
-            "message": f"Page cannot be reached (Error {status_code})",
+            "result": "PHISHING",
+            "display_result": "PHISHING DETECTED",
+            "confidence": f"{min(95, 50 + phishing_score)}%",
+            "message": "WARNING! This URL shows strong phishing indicators based on its structure. Do NOT enter any personal information!",
             "analysis_time": f"{time.time() - start_time:.2f} seconds",
             "security_details": {
-                "certificate": get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"},
-                "ip_info": get_ip_info(domain)
+                "certificate": get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False},
+                "ip_info": get_ip_info(domain) if domain_exists(domain_lower) else {"ip": "N/A"}
             },
             "html_features": {},
-            "website_summary": "Unable to fetch website content - page unreachable."
+            "website_summary": f"Phishing detected: {', '.join(pattern_reasons[:3])}",
+            "phishing_indicators": pattern_reasons
         }
     
-    # STEP 5: Run ML model for unknown domains
+    if not is_accessible:
+        if pattern_result == "SUSPICIOUS":
+            return {
+                "result": "PHISHING",
+                "display_result": "PHISHING DETECTED",
+                "confidence": f"{min(90, 40 + phishing_score)}%",
+                "message": "WARNING! This URL shows suspicious patterns and the page is unreachable - common in phishing attacks.",
+                "analysis_time": f"{time.time() - start_time:.2f} seconds",
+                "security_details": {},
+                "html_features": {},
+                "website_summary": f"Phishing detected: {', '.join(pattern_reasons[:2])}",
+                "phishing_indicators": pattern_reasons
+            }
+        else:
+            return {
+                "result": "UNREACHABLE",
+                "display_result": "SUSPICIOUS - Page Unreachable",
+                "confidence": "85%",
+                "message": f"Page cannot be reached (Error {status_code}). Phishing sites often disappear quickly.",
+                "analysis_time": f"{time.time() - start_time:.2f} seconds",
+                "security_details": {},
+                "html_features": {},
+                "website_summary": "Page unreachable - this is common for phishing sites."
+            }
+    
+    # STEP 6: Run ML model for accessible unknown domains
     feats = extract_features(url)
     website_summary = feats.pop('_website_summary', "No summary available.") if '_website_summary' in feats else "No summary available."
     
-    # Clean up features
     for key in list(feats.keys()):
         if key.startswith('_'):
             feats.pop(key, None)
@@ -213,8 +278,6 @@ def predict(data: URLRequest):
     df = pd.DataFrame([feats]).reindex(columns=feature_columns, fill_value=0)
     proba = model.predict_proba(df)[0]
     prediction = model.predict(df)[0]
-    
-    print(f"Raw prediction: {prediction}, Proba: {proba}")
     
     # Model mapping (0=Legitimate, 1=Phishing)
     if prediction == 0:
@@ -235,7 +298,7 @@ def predict(data: URLRequest):
         "message": message,
         "analysis_time": f"{time.time() - start_time:.2f} seconds",
         "security_details": {
-            "certificate": get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"},
+            "certificate": get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False},
             "ip_info": get_ip_info(domain)
         },
         "html_features": {
