@@ -11,6 +11,7 @@ from datetime import datetime
 import ssl
 import socket
 import re
+import os
 
 app = FastAPI()
 
@@ -136,7 +137,7 @@ def check_url_accessible(url: str):
     except Exception as e:
         return False, 0, str(e)[:100]
 
-# Trusted domains
+# Trusted domains - always legitimate
 TRUSTED_DOMAINS = [
     'github.com', 'microsoft.com', 'google.com', 'wikipedia.org', 
     'apple.com', 'amazon.com', 'facebook.com', 'twitter.com',
@@ -176,12 +177,12 @@ def predict(data: URLRequest):
             "website_summary": "Invalid domain format."
         }
     
-    # Check trusted domains
-    is_trusted = any(td in domain_lower for td in TRUSTED_DOMAINS)
-    
-    # Always try to get IP info (works even for non-trusted)
+    # Get certificate and IP info (works for all domains)
     cert_info = get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"}
     ip_info = get_ip_info(domain)
+    
+    # Check trusted domains
+    is_trusted = any(td in domain_lower for td in TRUSTED_DOMAINS)
     
     if is_trusted:
         print(f"TRUSTED DOMAIN: {domain} -> LEGITIMATE")
@@ -229,7 +230,7 @@ def predict(data: URLRequest):
             "website_summary": "Unable to fetch website content - domain may not exist or server is down."
         }
     
-    # Run ML analysis
+    # Run ML analysis for non-trusted accessible domains
     feats = extract_features(url)
     website_summary = feats.pop('_website_summary', "No summary available.") if '_website_summary' in feats else "No summary available."
     
@@ -239,7 +240,7 @@ def predict(data: URLRequest):
         "num_iframes": feats.get('num_iframes', 0)
     }
     
-    # Clean up features
+    # Clean up features for DataFrame
     for key in list(feats.keys()):
         if key.startswith('_'):
             feats.pop(key, None)
@@ -275,3 +276,10 @@ def predict(data: URLRequest):
         "html_features": html_features,
         "website_summary": website_summary
     }
+
+
+# For local testing
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
