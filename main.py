@@ -56,105 +56,95 @@ def get_certificate_info(domain: str):
         return {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"}
 
 def get_ip_info(domain: str):
-    """Get IP address and location info"""
+    """Get IP address and location info - FIXED with fallback APIs"""
     try:
+        # Step 1: Resolve domain to IP
         ip = socket.gethostbyname(domain)
-        return {"ip": ip, "country": "Unknown", "city": "Unknown", "asn": "Unknown", "org": "Unknown"}
-    except Exception:
+        
+        location_data = {"ip": ip, "country": "Unknown", "city": "Unknown", "asn": "Unknown", "org": "Unknown"}
+        
+        # Try ip-api.com first (fast, free, no key needed)
+        try:
+            response = requests.get(f"http://ip-api.com/json/{ip}?fields=status,country,city,isp,org,as,query", timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('status') == 'success':
+                    location_data = {
+                        "ip": data.get('query', ip),
+                        "country": data.get('country', 'Unknown'),
+                        "city": data.get('city', 'Unknown'),
+                        "asn": data.get('as', 'Unknown'),
+                        "org": data.get('org', data.get('isp', 'Unknown'))
+                    }
+        except:
+            pass
+        
+        # If ip-api.com failed, try ipapi.co (fallback)
+        if location_data['country'] == 'Unknown':
+            try:
+                response = requests.get(f"https://ipapi.co/{ip}/json/", timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    location_data = {
+                        "ip": ip,
+                        "country": data.get('country_name', 'Unknown'),
+                        "city": data.get('city', 'Unknown'),
+                        "asn": data.get('asn', 'Unknown'),
+                        "org": data.get('org', 'Unknown')
+                    }
+            except:
+                pass
+        
+        return location_data
+        
+    except Exception as e:
+        print(f"IP info error for {domain}: {e}")
         return {"ip": "Unknown", "country": "Unknown", "city": "Unknown", "asn": "Unknown", "org": "Unknown"}
 
-def is_educational_domain(domain: str) -> bool:
-    """Check if domain is educational (.edu, .gov, .my, etc.) or university portal"""
-    educational_patterns = [
-        '.edu', '.gov', '.ac.', '.sch.', '.school',
-        'student.', 'portal.', 'elearn', 'moodle', 'blackboard',
-        'um.edu.my', 'ukm.edu.my', 'upm.edu.my', 'usm.edu.my', 'utm.edu.my',
-        'uum.edu.my', 'unimas.edu.my', 'unisza.edu.my', 'uitm.edu.my'
-    ]
-    domain_lower = domain.lower()
-    for pattern in educational_patterns:
-        if pattern in domain_lower:
-            return True
-    return False
-
 def check_url_accessible(url: str):
-    """
-    Check if URL is accessible - IMPROVED for legitimate websites.
-    Also detects private/educational portals.
-    """
+    """Check if URL is accessible"""
     try:
         parsed = urlparse(url)
         domain = parsed.netloc or parsed.path
         domain = domain.split(':')[0]
         
-        # First, check if domain resolves (DNS lookup)
+        # Check DNS resolution
         try:
             socket.gethostbyname(domain)
         except socket.gaierror:
-            return False, 0, "Domain does not exist", False
+            return False, 0, "Domain does not exist"
         
-        # Check if this is likely an educational/private portal
-        is_private = is_educational_domain(domain)
-        
-        # Try HEAD request first
+        # Try HEAD request
         try:
             response = requests.head(url, timeout=8, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
             status_code = response.status_code
         except:
-            # If HEAD fails, try GET (some servers block HEAD)
+            # If HEAD fails, try GET
             try:
                 response = requests.get(url, timeout=10, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}, stream=True)
                 status_code = response.status_code
                 response.close()
             except:
-                return False, 0, "Cannot establish connection", is_private
+                return False, 0, "Cannot establish connection"
         
-        # Domain exists and server responded - consider it accessible
-        return True, status_code, f"Server responded with HTTP {status_code}", is_private
+        return True, status_code, f"HTTP {status_code}"
         
     except requests.exceptions.Timeout:
-        return False, 408, "Connection timeout", False
+        return False, 408, "Connection timeout"
     except requests.exceptions.ConnectionError:
-        return False, 0, "Cannot connect to server", False
+        return False, 0, "Cannot connect to server"
     except Exception as e:
-        return False, 0, str(e)[:100], False
+        return False, 0, str(e)[:100]
 
-# Trusted domains - always legitimate
+# Trusted domains
 TRUSTED_DOMAINS = [
-    # Tech & General
     'github.com', 'microsoft.com', 'google.com', 'wikipedia.org', 
     'apple.com', 'amazon.com', 'facebook.com', 'twitter.com',
     'linkedin.com', 'youtube.com', 'netflix.com', 'spotify.com',
     'reddit.com', 'stackoverflow.com', 'gitlab.com', 'zoom.us',
-    'slack.com', 'dropbox.com', 'cloudflare.com', 'adobe.com',
-    
-    # AI Websites
-    'deepseek.com', 'chat.deepseek.com', 'deepseek.ai',
-    'chatgpt.com', 'openai.com', 'chat.openai.com',
-    'claude.ai', 'claude.com', 'anthropic.com',
-    'perplexity.ai', 'gemini.google.com', 'bard.google.com',
-    'copilot.microsoft.com', 'huggingface.co',
-    
-    # Malaysian Banks
-    'maybank2u.com.my', 'cimbclicks.com.my', 'pbebank.com', 
-    'rhbgroup.com', 'bankislam.com', 'ambank.com.my',
-    'hongleongconnect.my', 'ocbc.com.my', 'uob.com.my',
-    
-    # Malaysian Government
-    'kedah.gov.my', 'selangor.gov.my', 'johor.gov.my',
-    'penang.gov.my', 'perak.gov.my', 'pahang.gov.my',
-    'terengganu.gov.my', 'kelantan.gov.my', 'ns.gov.my',
-    'melaka.gov.my', 'perlis.gov.my', 'sabah.gov.my',
-    'sarawak.gov.my', 'putrajaya.gov.my', 'kualalumpur.gov.my',
-    'hasil.gov.my', 'jpj.gov.my', 'jpn.gov.my', 'moe.gov.my',
-    'moh.gov.my', 'kkmm.gov.my', 'mdec.my',
-    
-    # Universities
-    'um.edu.my', 'ukm.edu.my', 'upm.edu.my', 'usm.edu.my',
-    'utm.edu.my', 'uum.edu.my', 'unimas.edu.my', 'unisza.edu.my',
-    'uitm.edu.my', 'uiam.edu.my', 'mmu.edu.my', 'taylors.edu.my',
-    'sunway.edu.my', 'monash.edu.my', 'nottingham.edu.my',
-    'curtin.edu.my', 'swinburne.edu.my', 'newcastle.edu.my'
+    'deepseek.com', 'chatgpt.com', 'openai.com', 'claude.ai',
+    'maybank2u.com.my', 'cimbclicks.com.my', 'pbebank.com', 'rhbgroup.com',
+    'kedah.gov.my', 'uum.edu.my', 'learning.uum.edu.my'
 ]
 
 @app.post("/predict")
@@ -170,7 +160,7 @@ def predict(data: URLRequest):
     domain = domain.split(':')[0]
     domain_lower = domain.lower()
     
-    # STEP 1: Validate domain format
+    # Validate domain format
     if not domain or '.' not in domain:
         return {
             "result": "INVALID",
@@ -178,13 +168,20 @@ def predict(data: URLRequest):
             "confidence": "95%",
             "message": "Please enter a valid website address (e.g., google.com, github.com)",
             "analysis_time": f"{time.time() - start_time:.2f} seconds",
-            "security_details": {},
+            "security_details": {
+                "certificate": {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"},
+                "ip_info": {"ip": "N/A", "country": "N/A", "city": "N/A", "asn": "N/A", "org": "N/A"}
+            },
             "html_features": {},
             "website_summary": "Invalid domain format."
         }
     
-    # STEP 2: Check trusted domains first
+    # Check trusted domains
     is_trusted = any(td in domain_lower for td in TRUSTED_DOMAINS)
+    
+    # Always try to get IP info (works even for non-trusted)
+    cert_info = get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"}
+    ip_info = get_ip_info(domain)
     
     if is_trusted:
         print(f"TRUSTED DOMAIN: {domain} -> LEGITIMATE")
@@ -207,48 +204,32 @@ def predict(data: URLRequest):
             "message": "This website appears to be legitimate based on our analysis.",
             "analysis_time": f"{time.time() - start_time:.2f} seconds",
             "security_details": {
-                "certificate": get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"},
-                "ip_info": get_ip_info(domain)
+                "certificate": cert_info,
+                "ip_info": ip_info
             },
             "html_features": html_features,
             "website_summary": website_summary
         }
     
-    # STEP 3: Check if domain exists and is accessible
-    is_accessible, status_code, status_message, is_private = check_url_accessible(url)
-    
-    # STEP 4: Special handling for educational/private portals
-    if is_private or is_educational_domain(domain_lower):
-        return {
-            "result": "LEGITIMATE",
-            "display_result": "PRIVATE / EDUCATIONAL PORTAL",
-            "confidence": "90%",
-            "message": "This appears to be an educational institution or private portal. Access may be restricted to authorized users only. The domain is legitimate.",
-            "analysis_time": f"{time.time() - start_time:.2f} seconds",
-            "security_details": {
-                "certificate": get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"},
-                "ip_info": get_ip_info(domain)
-            },
-            "html_features": {},
-            "website_summary": f"This is a legitimate {domain} website. It may require login credentials for full access."
-        }
+    # Check if URL is accessible
+    is_accessible, status_code, status_message = check_url_accessible(url)
     
     if not is_accessible:
-        # Only truly unreachable (DNS failure, connection refused) come here
         return {
             "result": "UNREACHABLE",
             "display_result": "SUSPICIOUS - Page Unreachable",
             "confidence": "85%",
             "message": f"Cannot reach website: {status_message}",
             "analysis_time": f"{time.time() - start_time:.2f} seconds",
-            "security_details": {},
+            "security_details": {
+                "certificate": cert_info,
+                "ip_info": ip_info
+            },
             "html_features": {},
             "website_summary": "Unable to fetch website content - domain may not exist or server is down."
         }
     
-    # STEP 5: Domain exists - proceed with ML analysis
-    print(f"Domain accessible (HTTP {status_code}) - proceeding with ML analysis")
-    
+    # Run ML analysis
     feats = extract_features(url)
     website_summary = feats.pop('_website_summary', "No summary available.") if '_website_summary' in feats else "No summary available."
     
@@ -258,7 +239,7 @@ def predict(data: URLRequest):
         "num_iframes": feats.get('num_iframes', 0)
     }
     
-    # Clean up features for DataFrame
+    # Clean up features
     for key in list(feats.keys()):
         if key.startswith('_'):
             feats.pop(key, None)
@@ -288,8 +269,8 @@ def predict(data: URLRequest):
         "message": message,
         "analysis_time": f"{time.time() - start_time:.2f} seconds",
         "security_details": {
-            "certificate": get_certificate_info(domain) if url.startswith("https") else {"has_ssl": False, "issuer": "N/A", "expiry": "N/A"},
-            "ip_info": get_ip_info(domain)
+            "certificate": cert_info,
+            "ip_info": ip_info
         },
         "html_features": html_features,
         "website_summary": website_summary
